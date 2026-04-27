@@ -3,10 +3,10 @@ name: Terraform AWS Infrastructure
 on:
   push:
     branches: [main]
-    paths: ["terraform/**"]
+    paths: ["terraform/**", "lambda/**"]
   pull_request:
     branches: [main]
-    paths: ["terraform/**"]
+    paths: ["terraform/**", "lambda/**"]
   workflow_dispatch:
     inputs:
       action:
@@ -15,6 +15,11 @@ on:
         default: "plan"
         type: choice
         options: [plan, apply, destroy]
+      smoke_test_symbol:
+        description: "Stock ticker symbol for post-deploy smoke test (e.g. MSFT, GOOGL, BTC-USD)"
+        required: false
+        default: "AAPL"
+        type: string
 
 env:
   TF_WORKING_DIR: terraform
@@ -42,11 +47,15 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.0
+          terraform_version: 1.10.0
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
+
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
 
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -70,7 +79,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.0
+          terraform_version: 1.10.0
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -108,7 +117,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.0
+          terraform_version: 1.10.0
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -123,6 +132,23 @@ jobs:
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform apply -auto-approve tfplan
+
+      - name: Smoke Test — GET /price?symbol=${{ github.event.inputs.smoke_test_symbol || 'AAPL' }}
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          SYMBOL: ${{ github.event.inputs.smoke_test_symbol || 'AAPL' }}
+        run: |
+          API_ENDPOINT=$(terraform output -raw api_endpoint)
+          API_KEY_ID=$(terraform output -raw api_key_id)
+          API_KEY_VALUE=$(aws apigateway get-api-key \
+            --api-key "$API_KEY_ID" \
+            --include-value \
+            --query 'value' \
+            --output text)
+          RESPONSE=$(curl -sf -H "x-api-key: $API_KEY_VALUE" "${API_ENDPOINT}?symbol=${SYMBOL}")
+          echo "Symbol: $SYMBOL"
+          echo "Response: $RESPONSE"
+          echo "$RESPONSE" | python3 -c "import sys, json; d = json.load(sys.stdin); assert d.get('response'), 'Empty response from agent'; print('Smoke test passed')"
 
   terraform-destroy:
     name: Destroy
@@ -143,7 +169,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.0
+          terraform_version: 1.10.0
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
